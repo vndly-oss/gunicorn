@@ -578,7 +578,7 @@ class Arbiter(object):
                                       "value": total_request_handlers,
                                       "mtype": "gauge"})
 
-        backlog = sum([sock.get_backlog() for sock in self.LISTENERS])
+        backlog = sum([sock.get_backlog() for sock in self.LISTENERS if sock.get_backlog() is not None])
         if backlog:
             self.log.debug("socket backlog: {0}".format(backlog),
                            extra={"metric": "gunicorn.backlog",
