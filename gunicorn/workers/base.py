@@ -11,6 +11,10 @@ from ssl import SSLError
 import sys
 import time
 import traceback
+from datetime import datetime
+from random import randint
+from ssl import SSLError
+from multiprocessing import Value
 
 from gunicorn import six
 from gunicorn import util
@@ -59,7 +63,7 @@ class Worker(object):
             self.max_requests = MAXSIZE
 
         self.alive = True
-        self.busy = False
+        self.busy = Value('i', 0)
         self.log = log
         self.tmp = WorkerTmp(cfg)
 
