@@ -556,6 +556,13 @@ class Arbiter(object):
             (pid, _) = workers.pop(0)
             self.kill_worker(pid, signal.SIGTERM)
 
+        inflight_requests = sum([w[1].get_inflight_requests() for w in workers])
+        if inflight_requests >= 0:
+            self.log.debug("{0} inflight requests".format(inflight_requests),
+                           extra={"metric": "gunicorn.inflight_requests",
+                                  "value": str(inflight_requests),
+                                  "mtype": "gauge"})
+
         active_worker_count = len(workers)
         if self._last_logged_active_worker_count != active_worker_count:
             self._last_logged_active_worker_count = active_worker_count
@@ -563,6 +570,13 @@ class Arbiter(object):
                            extra={"metric": "gunicorn.workers",
                                   "value": active_worker_count,
                                   "mtype": "gauge"})
+
+            total_request_handlers = sum([w[1].get_total_handlers() for w in workers])
+            if total_request_handlers >= 0:
+                self.log.debug("{0} total request handlers".format(total_request_handlers),
+                               extra={"metric": "gunicorn.total_request_handlers",
+                                      "value": total_request_handlers,
+                                      "mtype": "gauge"})
 
     def spawn_worker(self):
         self.worker_age += 1

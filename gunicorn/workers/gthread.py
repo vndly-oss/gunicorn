@@ -29,6 +29,8 @@ from .. import http
 from .. import util
 from ..http import wsgi
 
+from multiprocessing import Value
+
 
 class TConn(object):
 
@@ -76,6 +78,7 @@ class ThreadWorker(base.Worker):
         self.futures = deque()
         self._keep = deque()
         self.nr_conns = 0
+        self.inflight_requests = Value('i', 0)
 
     @classmethod
     def check_config(cls, cfg, log):
@@ -108,13 +111,21 @@ class ThreadWorker(base.Worker):
         self.futures.append(fs)
         fs.add_done_callback(self.finish_request)
 
+    def get_inflight_requests(self):
+        return self.inflight_requests.value
+
+    def get_total_handlers(self):
+        return self.cfg.threads
+
     def enqueue_req(self, conn):
         conn.init()
         # submit the connection to a worker
-        fs = self.tpool.submit(self.handle, conn)
+        enqueue_time = time.monotonic()
+        fs = self.tpool.submit(self.handle, conn, enqueue_time)
         self._wrap_future(fs, conn)
 
     def accept(self, server, listener):
+        self.log.debug('[%s]-[%s]: Accepting connection', self.pid, self.thread_name)
         try:
             sock, client = listener.accept()
             # initialize the connection object
@@ -128,6 +139,7 @@ class ThreadWorker(base.Worker):
                 raise
 
     def reuse_connection(self, conn, client):
+        self.log.debug('[%s]: Re-using connection', self.thread_name)
         with self._lock:
             # unregister the client from the poller
             self.poller.unregister(client)
@@ -229,6 +241,7 @@ class ThreadWorker(base.Worker):
         futures.wait(self.futures, timeout=self.cfg.graceful_timeout)
 
     def finish_request(self, fs):
+        self.log.debug('[%s]-[%s]: finish_request', self.pid, self.thread_name)
         if fs.cancelled():
             self.nr_conns -= 1
             fs.conn.close()
@@ -259,10 +272,21 @@ class ThreadWorker(base.Worker):
             self.nr_conns -= 1
             fs.conn.close()
 
-    def handle(self, conn):
+    def handle(self, conn, enqueue_time):
+        self.log.debug('[%s]-[%s]: handle conn', self.pid, self.thread_name)
         keepalive = False
         req = None
         try:
+            start_time = time.monotonic()
+            queued_time_ms = round((start_time - enqueue_time) * 1000)
+            self.log.debug(
+                "request was queued for %s ms", queued_time_ms,
+                extra={
+                    "mtype": "histogram",
+                    "metric": "gunicorn.request_queued_time_ms",
+                    "value": queued_time_ms,
+                }
+            )
             req = next(conn.parser)
             if not req:
                 return (False, conn)
@@ -300,10 +324,13 @@ class ThreadWorker(base.Worker):
         return (False, conn)
 
     def handle_request(self, req, conn):
+        self.log.debug('[%s]-[%s]: handle_request', self.pid, self.thread_name)
         environ = {}
         resp = None
         try:
             self.cfg.pre_request(self, req)
+            with self.inflight_requests.get_lock():
+                self.inflight_requests.value += 1
             request_start = datetime.now()
             resp, environ = wsgi.create(req, conn.sock, conn.client,
                                         conn.server, self.cfg)
@@ -355,6 +382,9 @@ class ThreadWorker(base.Worker):
             raise
         finally:
             try:
+                self.log.debug('[%s]-[%s]: finalize_request', self.pid, self.thread_name)
+                with self.inflight_requests.get_lock():
+                    self.inflight_requests.value -= 1
                 self.cfg.post_request(self, req, environ, resp)
             except Exception:
                 self.log.exception("Exception in post_request hook")
