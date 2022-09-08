@@ -43,10 +43,13 @@ class Arbiter:
     # Sentinel value for non-signal wakeups
     WAKEUP_REQUEST = signal.NSIG
 
-    SIGNALS = [getattr(signal, "SIG%s" % x)
-               for x in "HUP QUIT INT TERM TTIN TTOU USR1 USR2 WINCH".split()]
+    SIGNALS = [
+        getattr(signal, "SIG%s" % x)
+        for x in "HUP QUIT INT TERM TTIN TTOU USR1 USR2 WINCH".split()
+    ]
     SIG_NAMES = dict(
-        (getattr(signal, name), name[3:].lower()) for name in dir(signal)
+        (getattr(signal, name), name[3:].lower())
+        for name in dir(signal)
         if name[:3] == "SIG" and name[3] != "_"
     )
 
@@ -79,10 +82,10 @@ class Arbiter:
 
         # Stats tracking
         self._stats = {
-            'start_time': None,
-            'workers_spawned': 0,
-            'workers_killed': 0,
-            'reloads': 0,
+            "start_time": None,
+            "workers_spawned": 0,
+            "workers_killed": 0,
+            "reloads": 0,
         }
 
         cwd = util.getcwd()
@@ -91,11 +94,7 @@ class Arbiter:
         args.insert(0, sys.executable)
 
         # init start context
-        self.START_CTX = {
-            "args": args,
-            "cwd": cwd,
-            0: sys.executable
-        }
+        self.START_CTX = {"args": args, "cwd": cwd, 0: sys.executable}
 
     def _get_num_workers(self):
         return self._num_workers
@@ -104,6 +103,7 @@ class Arbiter:
         old_value = self._num_workers
         self._num_workers = value
         self.cfg.nworkers_changed(self, value, old_value)
+
     num_workers = property(_get_num_workers, _set_num_workers)
 
     def setup(self, app):
@@ -114,7 +114,7 @@ class Arbiter:
             self.log = self.cfg.logger_class(app.cfg)
 
         # reopen files
-        if 'GUNICORN_PID' in os.environ:
+        if "GUNICORN_PID" in os.environ:
             self.log.reopen_files()
 
         self.worker_class = self.cfg.worker_class
@@ -123,12 +123,16 @@ class Arbiter:
         self.timeout = self.cfg.timeout
         self.proc_name = self.cfg.proc_name
 
-        self.log.debug('Current configuration:\n{0}'.format(
-            '\n'.join(
-                '  {0}: {1}'.format(config, value.value)
-                for config, value
-                in sorted(self.cfg.settings.items(),
-                          key=lambda setting: setting[1]))))
+        self.log.debug(
+            "Current configuration:\n{0}".format(
+                "\n".join(
+                    "  {0}: {1}".format(config, value.value)
+                    for config, value in sorted(
+                        self.cfg.settings.items(), key=lambda setting: setting[1]
+                    )
+                )
+            )
+        )
 
         # set environment' variables
         if self.cfg.env:
@@ -145,10 +149,10 @@ class Arbiter:
         self.log.info("Starting gunicorn %s", __version__)
 
         # Initialize stats tracking
-        self._stats['start_time'] = time.time()
+        self._stats["start_time"] = time.time()
 
-        if 'GUNICORN_PID' in os.environ:
-            self.master_pid = int(os.environ.get('GUNICORN_PID'))
+        if "GUNICORN_PID" in os.environ:
+            self.master_pid = int(os.environ.get("GUNICORN_PID"))
             self.proc_name = self.proc_name + ".2"
             self.master_name = "Master.2"
 
@@ -168,15 +172,17 @@ class Arbiter:
             listen_fds = systemd.listen_fds()
             if listen_fds:
                 self.systemd = True
-                fds = range(systemd.SD_LISTEN_FDS_START,
-                            systemd.SD_LISTEN_FDS_START + listen_fds)
+                fds = range(
+                    systemd.SD_LISTEN_FDS_START,
+                    systemd.SD_LISTEN_FDS_START + listen_fds,
+                )
 
             elif self.master_pid:
                 fds = []
-                for fd in os.environ.pop('GUNICORN_FD').split(','):
+                for fd in os.environ.pop("GUNICORN_FD").split(","):
                     fds.append(int(fd))
 
-            if not (self.cfg.reuse_port and hasattr(socket, 'SO_REUSEPORT')):
+            if not (self.cfg.reuse_port and hasattr(socket, "SO_REUSEPORT")):
                 self.LISTENERS = sock.create_sockets(self.cfg, self.log, fds)
 
         listeners_str = ",".join([str(lnr) for lnr in self.LISTENERS])
@@ -241,7 +247,9 @@ class Arbiter:
                         self.log.error("Unhandled signal: %s", signame)
                         continue
                     # Log SIGCHLD at debug level since it's frequent
-                    log_level = self.log.debug if sig == signal.SIGCHLD else self.log.info
+                    log_level = (
+                        self.log.debug if sig == signal.SIGCHLD else self.log.info
+                    )
                     log_level("Handling signal: %s", signame)
                     handler()
 
@@ -255,8 +263,7 @@ class Arbiter:
         except SystemExit:
             raise
         except Exception:
-            self.log.error("Unhandled exception in main loop",
-                           exc_info=True)
+            self.log.error("Unhandled exception in main loop", exc_info=True)
             self.stop(False)
             if self.pidfile is not None:
                 self.pidfile.unlink()
@@ -359,7 +366,7 @@ class Arbiter:
             self.master_name = "Master"
             self.master_pid = 0
             self.proc_name = self.cfg.proc_name
-            del os.environ['GUNICORN_PID']
+            del os.environ["GUNICORN_PID"]
             # rename the pidfile
             if self.pidfile is not None:
                 self.pidfile.rename(self.cfg.pidfile)
@@ -371,7 +378,7 @@ class Arbiter:
         self.SIG_QUEUE.put_nowait(self.WAKEUP_REQUEST)
 
     def halt(self, reason=None, exit_status=0):
-        """ halt arbiter """
+        """halt arbiter"""
         # Stop control socket server first
         self._stop_control_server()
 
@@ -486,23 +493,24 @@ class Arbiter:
         self.cfg.pre_exec(self)
 
         environ = self.cfg.env_orig.copy()
-        environ['GUNICORN_PID'] = str(master_pid)
+        environ["GUNICORN_PID"] = str(master_pid)
 
         if self.systemd:
-            environ['LISTEN_PID'] = str(os.getpid())
-            environ['LISTEN_FDS'] = str(len(self.LISTENERS))
+            environ["LISTEN_PID"] = str(os.getpid())
+            environ["LISTEN_FDS"] = str(len(self.LISTENERS))
         else:
-            environ['GUNICORN_FD'] = ','.join(
-                str(lnr.fileno()) for lnr in self.LISTENERS)
+            environ["GUNICORN_FD"] = ",".join(
+                str(lnr.fileno()) for lnr in self.LISTENERS
+            )
 
-        os.chdir(self.START_CTX['cwd'])
+        os.chdir(self.START_CTX["cwd"])
 
         # exec the process using the original environment
-        os.execvpe(self.START_CTX[0], self.START_CTX['args'], environ)
+        os.execvpe(self.START_CTX[0], self.START_CTX["args"], environ)
 
     def reload(self):
         # Track reload stats
-        self._stats['reloads'] += 1
+        self._stats["reloads"] += 1
 
         old_address = self.cfg.address
 
@@ -580,7 +588,7 @@ class Arbiter:
         if not self.timeout:
             return
         workers = list(self.WORKERS.items())
-        for (pid, worker) in workers:
+        for pid, worker in workers:
             try:
                 if time.monotonic() - worker.tmp.last_update() <= self.timeout:
                     continue
@@ -618,8 +626,7 @@ class Arbiter:
                             sig_name = signal.Signals(sig).name
                         except ValueError:
                             sig_name = "signal {}".format(sig)
-                        msg = "Worker (pid:{}) was sent {}!".format(
-                            wpid, sig_name)
+                        msg = "Worker (pid:{}) was sent {}!".format(wpid, sig_name)
 
                         # SIGKILL suggests OOM, log as error
                         if sig == signal.SIGKILL:
@@ -633,8 +640,9 @@ class Arbiter:
                             self.log.warning(msg)
 
                     if exitcode is not None and exitcode != 0:
-                        self.log.error("Worker (pid:%s) exited with code %s.",
-                                       wpid, exitcode)
+                        self.log.error(
+                            "Worker (pid:%s) exited with code %s.", wpid, exitcode
+                        )
 
                     if exitcode == self.WORKER_BOOT_ERROR:
                         reason = "Worker failed to boot."
@@ -666,36 +674,70 @@ class Arbiter:
             (pid, _) = workers.pop(0)
             self.kill_worker(pid, signal.SIGTERM)
 
+        inflight_requests = sum([w[1].get_inflight_requests() for w in workers])
+        if inflight_requests >= 0:
+            self.log.debug(
+                "{0} inflight requests".format(inflight_requests),
+                extra={
+                    "metric": "gunicorn.inflight_requests",
+                    "value": str(inflight_requests),
+                    "mtype": "gauge",
+                },
+            )
+
         active_worker_count = len(workers)
         if self._last_logged_active_worker_count != active_worker_count:
             self._last_logged_active_worker_count = active_worker_count
-            self.log.debug("{0} workers".format(active_worker_count),
-                           extra={"metric": "gunicorn.workers",
-                                  "value": active_worker_count,
-                                  "mtype": "gauge"})
+            self.log.debug(
+                "{0} workers".format(active_worker_count),
+                extra={
+                    "metric": "gunicorn.workers",
+                    "value": active_worker_count,
+                    "mtype": "gauge",
+                },
+            )
+            total_request_handlers = sum([w[1].get_total_handlers() for w in workers])
+            if total_request_handlers >= 0:
+                self.log.debug(
+                    "{0} total request handlers".format(total_request_handlers),
+                    extra={
+                        "metric": "gunicorn.total_request_handlers",
+                        "value": total_request_handlers,
+                        "mtype": "gauge",
+                    },
+                )
 
         if self.cfg.enable_backlog_metric:
-            backlog = sum(sock.get_backlog() or 0
-                          for sock in self.LISTENERS)
+            backlog = sum(sock.get_backlog() or 0 for sock in self.LISTENERS)
 
             if backlog >= 0:
-                self.log.debug("socket backlog: {0}".format(backlog),
-                               extra={"metric": "gunicorn.backlog",
-                                      "value": backlog,
-                                      "mtype": "histogram"})
+                self.log.debug(
+                    "socket backlog: {0}".format(backlog),
+                    extra={
+                        "metric": "gunicorn.backlog",
+                        "value": backlog,
+                        "mtype": "histogram",
+                    },
+                )
 
     def spawn_worker(self):
         self.worker_age += 1
-        worker = self.worker_class(self.worker_age, self.pid, self.LISTENERS,
-                                   self.app, self.timeout / 2.0,
-                                   self.cfg, self.log)
+        worker = self.worker_class(
+            self.worker_age,
+            self.pid,
+            self.LISTENERS,
+            self.app,
+            self.timeout / 2.0,
+            self.cfg,
+            self.log,
+        )
         self.cfg.pre_fork(self, worker)
 
         pid = os.fork()
         if pid != 0:
             worker.pid = pid
             self.WORKERS[pid] = worker
-            self._stats['workers_spawned'] += 1
+            self._stats["workers_spawned"] += 1
             return pid
 
         # Do not inherit the temporary files of other workers
@@ -715,8 +757,7 @@ class Arbiter:
         except SystemExit:
             raise
         except AppImportError as e:
-            self.log.debug("Exception while loading the application",
-                           exc_info=True)
+            self.log.debug("Exception while loading the application", exc_info=True)
             print("%s" % e, file=sys.stderr)
             sys.stderr.flush()
             sys.exit(self.APP_LOAD_ERROR)
@@ -733,8 +774,9 @@ class Arbiter:
                 worker.tmp.close()
                 self.cfg.worker_exit(self, worker)
             except Exception:
-                self.log.warning("Exception during worker exit:\n%s",
-                                 traceback.format_exc())
+                self.log.warning(
+                    "Exception during worker exit:\n%s", traceback.format_exc()
+                )
 
     def spawn_workers(self):
         """\
@@ -768,7 +810,7 @@ class Arbiter:
             os.kill(pid, sig)
             # Track kills only on SIGTERM/SIGKILL (actual termination signals)
             if sig in (signal.SIGTERM, signal.SIGKILL):
-                self._stats['workers_killed'] += 1
+                self._stats["workers_killed"] += 1
         except OSError as e:
             if e.errno == errno.ESRCH:
                 try:
@@ -792,7 +834,8 @@ class Arbiter:
         This prevents the old dirty arbiter from removing the new one's PID file.
         """
         import tempfile
-        safe_name = self.proc_name.replace('/', '_').replace(' ', '_')
+
+        safe_name = self.proc_name.replace("/", "_").replace(" ", "_")
         return os.path.join(tempfile.gettempdir(), f"gunicorn-dirty-{safe_name}.pid")
 
     def _cleanup_orphaned_dirty_arbiter(self):
@@ -855,8 +898,7 @@ class Arbiter:
         self.dirty_pidfile = self._get_dirty_pidfile_path()
 
         self.dirty_arbiter = DirtyArbiter(
-            self.cfg, self.log,
-            pidfile=self.dirty_pidfile
+            self.cfg, self.log, pidfile=self.dirty_pidfile
         )
         socket_path = self.dirty_arbiter.socket_path
 
@@ -866,9 +908,8 @@ class Arbiter:
             self.dirty_arbiter_pid = pid
             # Set socket path for HTTP workers to use
             set_dirty_socket_path(socket_path)
-            os.environ['GUNICORN_DIRTY_SOCKET'] = socket_path
-            self.log.info("Spawned dirty arbiter (pid: %s) at %s",
-                          pid, socket_path)
+            os.environ["GUNICORN_DIRTY_SOCKET"] = socket_path
+            self.log.info("Spawned dirty arbiter (pid: %s) at %s", pid, socket_path)
             return pid
 
         # Child process - run the dirty arbiter
@@ -912,14 +953,16 @@ class Arbiter:
             if os.WIFEXITED(status):
                 exitcode = os.WEXITSTATUS(status)
                 if exitcode != 0:
-                    self.log.error("Dirty arbiter (pid:%s) exited with code %s",
-                                   wpid, exitcode)
+                    self.log.error(
+                        "Dirty arbiter (pid:%s) exited with code %s", wpid, exitcode
+                    )
                 else:
                     self.log.info("Dirty arbiter (pid:%s) exited", wpid)
             elif os.WIFSIGNALED(status):
                 sig = os.WTERMSIG(status)
-                self.log.warning("Dirty arbiter (pid:%s) killed by signal %s",
-                                 wpid, sig)
+                self.log.warning(
+                    "Dirty arbiter (pid:%s) killed by signal %s", wpid, sig
+                )
 
             self.dirty_arbiter_pid = 0
             self.dirty_arbiter = None
@@ -968,9 +1011,7 @@ class Arbiter:
         socket_mode = self.cfg.control_socket_mode
 
         try:
-            self._control_server = ControlSocketServer(
-                self, socket_path, socket_mode
-            )
+            self._control_server = ControlSocketServer(self, socket_path, socket_mode)
             self._control_server.start()
         except Exception as e:
             self.log.warning("Failed to start control socket: %s", e)

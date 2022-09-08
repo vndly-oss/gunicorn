@@ -29,6 +29,8 @@ from .. import util
 from .. import sock
 from ..http import wsgi
 
+from multiprocessing import Value
+
 
 # Sentinel value to indicate connection should be deferred back to poller
 _DEFER = object()
@@ -179,7 +181,7 @@ class PollableMethodQueue:
         """
         self._queue.put(partial(callback, *args))
         try:
-            os.write(self._write_fd, b'\x00')
+            os.write(self._write_fd, b"\x00")
         except OSError:
             # Pipe buffer full (EAGAIN/EWOULDBLOCK) - safe to ignore
             # The main thread will still process the queue
@@ -224,14 +226,17 @@ class ThreadWorker(base.Worker):
         self.pending_conns = deque()
         self.nr_conns = 0
         self._accepting = False
+        self.inflight_requests = Value("i", 0)
 
     @classmethod
     def check_config(cls, cfg, log):
         max_keepalived = cfg.worker_connections - cfg.threads
 
         if max_keepalived <= 0 and cfg.keepalive:
-            log.warning("No keepalived connections can be handled. " +
-                        "Check the number of worker connections and threads.")
+            log.warning(
+                "No keepalived connections can be handled. "
+                + "Check the number of worker connections and threads."
+            )
 
     def init_process(self):
         self.tpool = self.get_thread_pool()
@@ -269,14 +274,22 @@ class ThreadWorker(base.Worker):
 
         self._accepting = enabled
 
+    def get_inflight_requests(self):
+        return self.inflight_requests.value
+
+    def get_total_handlers(self):
+        return self.cfg.threads
+
     def enqueue_req(self, conn):
         """Submit connection to thread pool for processing."""
         fs = self.tpool.submit(self.handle, conn)
         fs.add_done_callback(
-            lambda fut: self.method_queue.defer(self.finish_request, conn, fut))
+            lambda fut: self.method_queue.defer(self.finish_request, conn, fut)
+        )
 
     def accept(self, listener):
         """Accept a new connection from a listener socket."""
+        self.log.debug("[%s]-[%s]: Accepting connection", self.pid, self.thread_name)
         try:
             client_sock, client_addr = listener.accept()
             self.nr_conns += 1
@@ -294,6 +307,18 @@ class ThreadWorker(base.Worker):
         """Handle a keepalive connection becoming readable."""
         self.poller.unregister(client)
         self.keepalived_conns.remove(conn)
+
+    def reuse_connection(self, conn, client):
+        self.log.debug("[%s]: Re-using connection", self.thread_name)
+        with self._lock:
+            # unregister the client from the poller
+            self.poller.unregister(client)
+            # remove the connection from keepalive
+            try:
+                self._keep.remove(conn)
+            except ValueError:
+                # race condition
+                return
 
         # Submit to thread pool for processing
         self.enqueue_req(conn)
@@ -365,9 +390,11 @@ class ThreadWorker(base.Worker):
 
     def run(self):
         # Register the method queue with the poller
-        self.poller.register(self.method_queue.fileno(),
-                             selectors.EVENT_READ,
-                             self.method_queue.run_callbacks)
+        self.poller.register(
+            self.method_queue.fileno(),
+            selectors.EVENT_READ,
+            self.method_queue.run_callbacks,
+        )
 
         # Start accepting connections
         self.set_accept_enabled(True)
@@ -414,6 +441,7 @@ class ThreadWorker(base.Worker):
 
     def finish_request(self, conn, fs):
         """Handle completion of a request (called via method_queue on main thread)."""
+        self.log.debug("[%s]-[%s]: finish_request", self.pid, self.thread_name)
         try:
             result = fs.result() if not fs.cancelled() else False
 
@@ -424,15 +452,21 @@ class ThreadWorker(base.Worker):
                 # Use keepalive timeout for pending connections too
                 conn.timeout = time.monotonic() + self.cfg.keepalive
                 self.pending_conns.append(conn)
-                self.poller.register(conn.sock, selectors.EVENT_READ,
-                                     partial(self.on_pending_socket_readable, conn))
+                self.poller.register(
+                    conn.sock,
+                    selectors.EVENT_READ,
+                    partial(self.on_pending_socket_readable, conn),
+                )
             elif result and self.alive:
                 # Keepalive - put connection back in the poller
                 conn.sock.setblocking(False)
                 conn.set_timeout()
                 self.keepalived_conns.append(conn)
-                self.poller.register(conn.sock, selectors.EVENT_READ,
-                                     partial(self.on_client_socket_readable, conn))
+                self.poller.register(
+                    conn.sock,
+                    selectors.EVENT_READ,
+                    partial(self.on_client_socket_readable, conn),
+                )
             else:
                 self.nr_conns -= 1
                 conn.close()
@@ -442,6 +476,8 @@ class ThreadWorker(base.Worker):
 
     def handle(self, conn):
         """Handle a request on a connection. Runs in a worker thread."""
+        self.log.debug("[%s]-[%s]: handle conn", self.pid, self.thread_name)
+        keepalive = False
         req = None
         try:
             # For new connections (not yet initialized), wait for data with timeout
@@ -565,8 +601,9 @@ class ThreadWorker(base.Worker):
             request_start = datetime.now()
 
             # Create WSGI environ
-            resp, environ = wsgi.create(req, conn.sock, conn.client,
-                                        conn.server, self.cfg)
+            resp, environ = wsgi.create(
+                req, conn.sock, conn.client, conn.server, self.cfg
+            )
             environ["wsgi.multithread"] = True
             environ["HTTP_VERSION"] = "2"  # Indicate HTTP/2
 
@@ -596,9 +633,9 @@ class ThreadWorker(base.Worker):
             respiter = self.wsgi(environ, resp.start_response)
 
             # Collect response body
-            response_body = b''
+            response_body = b""
             try:
-                if hasattr(respiter, '__iter__'):
+                if hasattr(respiter, "__iter__"):
                     for item in respiter:
                         if item:
                             response_body += item
@@ -610,19 +647,23 @@ class ThreadWorker(base.Worker):
             if pending_trailers:
                 # Send headers, body, then trailers separately
                 # Build response headers with :status pseudo-header
-                response_headers = [(':status', str(resp.status_code))]
+                response_headers = [(":status", str(resp.status_code))]
                 for name, value in resp.headers:
                     response_headers.append((name.lower(), str(value)))
 
                 # Send headers without ending stream
-                h2_conn.h2_conn.send_headers(stream_id, response_headers, end_stream=False)
+                h2_conn.h2_conn.send_headers(
+                    stream_id, response_headers, end_stream=False
+                )
                 stream = h2_conn.streams[stream_id]
                 stream.send_headers(response_headers, end_stream=False)
                 h2_conn._send_pending_data()
 
                 # Send body without ending stream
                 if response_body:
-                    h2_conn.h2_conn.send_data(stream_id, response_body, end_stream=False)
+                    h2_conn.h2_conn.send_data(
+                        stream_id, response_body, end_stream=False
+                    )
                     stream.send_data(response_body, end_stream=False)
                     h2_conn._send_pending_data()
 
@@ -631,10 +672,7 @@ class ThreadWorker(base.Worker):
             else:
                 # No trailers, use standard response
                 h2_conn.send_response(
-                    stream_id,
-                    resp.status_code,
-                    resp.headers,
-                    response_body
+                    stream_id, resp.status_code, resp.headers, response_body
                 )
 
             request_time = datetime.now() - request_start
@@ -647,13 +685,17 @@ class ThreadWorker(base.Worker):
                 self.log.exception("Exception in post_request hook")
 
     def handle_request(self, req, conn):
+        self.log.debug("[%s]-[%s]: handle_request", self.pid, self.thread_name)
         environ = {}
         resp = None
         try:
             self.cfg.pre_request(self, req)
+            with self.inflight_requests.get_lock():
+                self.inflight_requests.value += 1
             request_start = datetime.now()
-            resp, environ = wsgi.create(req, conn.sock, conn.client,
-                                        conn.server, self.cfg)
+            resp, environ = wsgi.create(
+                req, conn.sock, conn.client, conn.server, self.cfg
+            )
             environ["wsgi.multithread"] = True
             self.nr += 1
             if self.nr >= self.max_requests:
@@ -669,7 +711,7 @@ class ThreadWorker(base.Worker):
 
             respiter = self.wsgi(environ, resp.start_response)
             try:
-                if isinstance(respiter, environ['wsgi.file_wrapper']):
+                if isinstance(respiter, environ["wsgi.file_wrapper"]):
                     resp.write_file(respiter)
                 else:
                     for item in respiter:
@@ -702,6 +744,11 @@ class ThreadWorker(base.Worker):
             raise
         finally:
             try:
+                self.log.debug(
+                    "[%s]-[%s]: finalize_request", self.pid, self.thread_name
+                )
+                with self.inflight_requests.get_lock():
+                    self.inflight_requests.value -= 1
                 self.cfg.post_request(self, req, environ, resp)
             except Exception:
                 self.log.exception("Exception in post_request hook")
