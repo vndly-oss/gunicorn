@@ -18,6 +18,7 @@ MTYPE_VAR = "mtype"
 GAUGE_TYPE = "gauge"
 COUNTER_TYPE = "counter"
 HISTOGRAM_TYPE = "histogram"
+TIMER_TYPE = "timer"
 
 
 class Statsd(Logger):
@@ -28,6 +29,8 @@ class Statsd(Logger):
         """
         Logger.__init__(self, cfg)
         self.prefix = sub(r"^(.+[^.]+)\.*$", "\\g<1>.", cfg.statsd_prefix)
+        # TODO: Support non-global tags as well
+        self.global_tags = cfg.statsd_tags
         try:
             host, port = cfg.statsd_host
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -78,6 +81,8 @@ class Statsd(Logger):
                         self.increment(metric, value)
                     elif typ == HISTOGRAM_TYPE:
                         self.histogram(metric, value)
+                    elif typ == TIMER_TYPE:
+                        self.timer(metric, value)
                     else:
                         pass
 
@@ -97,7 +102,7 @@ class Statsd(Logger):
         status = resp.status
         if isinstance(status, str):
             status = int(status.split(None, 1)[0])
-        self.histogram("gunicorn.request.duration", duration_in_ms)
+        self.timer("gunicorn.request.duration", duration_in_ms)
         self.increment("gunicorn.requests", 1)
         self.increment("gunicorn.request.status.%d" % status, 1)
 
@@ -112,10 +117,15 @@ class Statsd(Logger):
     def decrement(self, name, value, sampling_rate=1.0):
         self._sock_send("{0}{1}:-{2}|c|@{3}".format(self.prefix, name, value, sampling_rate))
 
-    def histogram(self, name, value):
+    def timer(self, name, value):
         self._sock_send("{0}{1}:{2}|ms".format(self.prefix, name, value))
 
+    def histogram(self, name, value):
+        self._sock_send("{0}{1}:{2}|h".format(self.prefix, name, value))
+
     def _sock_send(self, msg):
+        if self.global_tags:
+            msg = "{msg}|#{tags}".format(msg=msg, tags=_serialize_tags(self.global_tags))
         try:
             if isinstance(msg, str):
                 msg = msg.encode("ascii")
@@ -128,3 +138,7 @@ class Statsd(Logger):
                 self.sock.send(msg)
         except Exception:
             Logger.warning(self, "Error sending message to statsd", exc_info=True)
+
+
+def _serialize_tags(tags):
+    return ','.join([t for t in tags])
