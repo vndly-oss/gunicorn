@@ -674,7 +674,7 @@ class Arbiter:
             (pid, _) = workers.pop(0)
             self.kill_worker(pid, signal.SIGTERM)
 
-        inflight_requests = sum([w[1].get_inflight_requests() for w in workers])
+        inflight_requests = sum(w[1].get_inflight_requests() for w in workers)
         if inflight_requests >= 0:
             self.log.debug(
                 "{0} inflight requests".format(inflight_requests),
@@ -696,7 +696,7 @@ class Arbiter:
                     "mtype": "gauge",
                 },
             )
-            total_request_handlers = sum([w[1].get_total_handlers() for w in workers])
+            total_request_handlers = sum(w[1].get_total_handlers() for w in workers)
             if total_request_handlers >= 0:
                 self.log.debug(
                     "{0} total request handlers".format(total_request_handlers),

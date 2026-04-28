@@ -152,4 +152,4 @@ class Statsd(Logger):
 
 
 def _serialize_tags(tags):
-    return ",".join([t for t in tags])
+    return ",".join(tags)

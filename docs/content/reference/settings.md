@@ -724,6 +724,15 @@ if not provided).
 
 !!! info "Added in 19.2"
 
+### `statsd_tags`
+
+**Command line:** `--statsd-tags STATSD_TAGS`
+
+**Default:** `[]`
+
+Statsd tags to send to statsd server. It will be appended to the end of the statsd
+message for consumers / servers that support tags like datadog and cloudwatch.
+
 ### `enable_backlog_metric`
 
 **Command line:** `--enable-backlog-metric`
