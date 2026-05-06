@@ -19,7 +19,7 @@ from gunicorn.workers import base
 
 
 class StopWaiting(Exception):
-    """exception raised to stop waiting for a connection"""
+    """ exception raised to stop waiting for a connection """
 
 
 class SyncWorker(base.Worker):
@@ -77,7 +77,8 @@ class SyncWorker(base.Worker):
                 continue
 
             except OSError as e:
-                if e.errno not in (errno.EAGAIN, errno.ECONNABORTED, errno.EWOULDBLOCK):
+                if e.errno not in (errno.EAGAIN, errno.ECONNABORTED,
+                                   errno.EWOULDBLOCK):
                     raise
 
             if not self.is_parent_alive():
@@ -105,11 +106,8 @@ class SyncWorker(base.Worker):
                     try:
                         self.accept(listener)
                     except OSError as e:
-                        if e.errno not in (
-                            errno.EAGAIN,
-                            errno.ECONNABORTED,
-                            errno.EWOULDBLOCK,
-                        ):
+                        if e.errno not in (errno.EAGAIN, errno.ECONNABORTED,
+                                           errno.EWOULDBLOCK):
                             raise
 
             if not self.is_parent_alive():
@@ -121,7 +119,7 @@ class SyncWorker(base.Worker):
         timeout = self.timeout or 0.5
 
         # Warn if HTTP/2 is requested - sync worker doesn't support it
-        if "h2" in self.cfg.http_protocols:
+        if 'h2' in self.cfg.http_protocols:
             self.log.warning(
                 "HTTP/2 is not supported by the sync worker. "
                 "Use gthread, gevent, eventlet, or asgi workers for HTTP/2 support. "
@@ -179,9 +177,8 @@ class SyncWorker(base.Worker):
             self.cfg.pre_request(self, req)
             self.inflight_requests += 1
             request_start = datetime.now()
-            resp, environ = wsgi.create(
-                req, client, addr, listener.getsockname(), self.cfg
-            )
+            resp, environ = wsgi.create(req, client, addr,
+                                        listener.getsockname(), self.cfg)
             # Force the connection closed until someone shows
             # a buffering proxy that supports Keep-Alive to
             # the backend.
@@ -192,7 +189,7 @@ class SyncWorker(base.Worker):
                 self.alive = False
             respiter = self.wsgi(environ, resp.start_response)
             try:
-                if isinstance(respiter, environ["wsgi.file_wrapper"]):
+                if isinstance(respiter, environ['wsgi.file_wrapper']):
                     resp.write_file(respiter)
                 else:
                     for item in respiter:
