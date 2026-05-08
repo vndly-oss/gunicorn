@@ -308,21 +308,6 @@ class ThreadWorker(base.Worker):
         # Submit to thread pool for processing
         self.enqueue_req(conn)
 
-    def reuse_connection(self, conn, client):
-        self.log.debug("[%s]: Re-using connection", self.thread_name)
-        with self._lock:
-            # unregister the client from the poller
-            self.poller.unregister(client)
-            # remove the connection from keepalive
-            try:
-                self._keep.remove(conn)
-            except ValueError:
-                # race condition
-                return
-
-        # Submit to thread pool for processing
-        self.enqueue_req(conn)
-
     def on_pending_socket_readable(self, conn, client):
         """Handle a pending (deferred) connection becoming readable."""
         self.poller.unregister(client)
@@ -469,7 +454,6 @@ class ThreadWorker(base.Worker):
     def handle(self, conn):
         """Handle a request on a connection. Runs in a worker thread."""
         self.log.debug("[%s]-[%s]: handle conn", self.pid, self.thread_name)
-        keepalive = False
         req = None
         try:
             # For new connections (not yet initialized), wait for data with timeout
