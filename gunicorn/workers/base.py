@@ -6,6 +6,7 @@ import io
 import os
 import signal
 import sys
+import threading
 import time
 import traceback
 from datetime import datetime
@@ -66,6 +67,16 @@ class Worker:
 
     def __str__(self):
         return "<Worker %s>" % self.pid
+
+    def get_inflight_requests(self):
+        return -1
+
+    def get_total_handlers(self):
+        return -1
+
+    @property
+    def thread_name(self):
+        return threading.current_thread().name
 
     def notify(self):
         """\

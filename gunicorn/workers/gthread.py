@@ -29,6 +29,8 @@ from .. import util
 from .. import sock
 from ..http import wsgi
 
+from multiprocessing import Value
+
 
 # Sentinel value to indicate connection should be deferred back to poller
 _DEFER = object()
@@ -224,6 +226,7 @@ class ThreadWorker(base.Worker):
         self.pending_conns = deque()
         self.nr_conns = 0
         self._accepting = False
+        self.inflight_requests = Value('i', 0)
 
     @classmethod
     def check_config(cls, cfg, log):
@@ -269,6 +272,12 @@ class ThreadWorker(base.Worker):
 
         self._accepting = enabled
 
+    def get_inflight_requests(self):
+        return self.inflight_requests.value
+
+    def get_total_handlers(self):
+        return self.cfg.threads
+
     def enqueue_req(self, conn):
         """Submit connection to thread pool for processing."""
         fs = self.tpool.submit(self.handle, conn)
@@ -277,6 +286,7 @@ class ThreadWorker(base.Worker):
 
     def accept(self, listener):
         """Accept a new connection from a listener socket."""
+        self.log.debug("[%s]-[%s]: Accepting connection", self.pid, self.thread_name)
         try:
             client_sock, client_addr = listener.accept()
             self.nr_conns += 1
@@ -414,6 +424,7 @@ class ThreadWorker(base.Worker):
 
     def finish_request(self, conn, fs):
         """Handle completion of a request (called via method_queue on main thread)."""
+        self.log.debug("[%s]-[%s]: finish_request", self.pid, self.thread_name)
         try:
             result = fs.result() if not fs.cancelled() else False
 
@@ -442,6 +453,7 @@ class ThreadWorker(base.Worker):
 
     def handle(self, conn):
         """Handle a request on a connection. Runs in a worker thread."""
+        self.log.debug("[%s]-[%s]: handle conn", self.pid, self.thread_name)
         req = None
         try:
             # For new connections (not yet initialized), wait for data with timeout
@@ -647,10 +659,13 @@ class ThreadWorker(base.Worker):
                 self.log.exception("Exception in post_request hook")
 
     def handle_request(self, req, conn):
+        self.log.debug("[%s]-[%s]: handle_request", self.pid, self.thread_name)
         environ = {}
         resp = None
         try:
             self.cfg.pre_request(self, req)
+            with self.inflight_requests.get_lock():
+                self.inflight_requests.value += 1
             request_start = datetime.now()
             resp, environ = wsgi.create(req, conn.sock, conn.client,
                                         conn.server, self.cfg)
@@ -702,6 +717,11 @@ class ThreadWorker(base.Worker):
             raise
         finally:
             try:
+                self.log.debug(
+                    "[%s]-[%s]: finalize_request", self.pid, self.thread_name
+                )
+                with self.inflight_requests.get_lock():
+                    self.inflight_requests.value -= 1
                 self.cfg.post_request(self, req, environ, resp)
             except Exception:
                 self.log.exception("Exception in post_request hook")

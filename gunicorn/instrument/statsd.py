@@ -27,6 +27,9 @@ class Statsd(Logger):
         Logger.__init__(self, cfg)
         self.prefix = sub(r"^(.+[^.]+)\.*$", "\\g<1>.", cfg.statsd_prefix)
 
+        # TODO: Support non-global tags as well
+        self.global_tags = cfg.statsd_tags
+
         if isinstance(cfg.statsd_host, str):
             address_family = socket.AF_UNIX
         else:
@@ -126,6 +129,8 @@ class Statsd(Logger):
         self._sock_send("{0}{1}:{2}|h".format(self.prefix, name, value))
 
     def _sock_send(self, msg):
+        if self.global_tags:
+            msg = "{msg}|#{tags}".format(msg=msg, tags=_serialize_tags(self.global_tags))
         try:
             if isinstance(msg, str):
                 msg = msg.encode("ascii")
@@ -138,3 +143,7 @@ class Statsd(Logger):
                 self.sock.send(msg)
         except Exception:
             Logger.warning(self, "Error sending message to statsd", exc_info=True)
+
+
+def _serialize_tags(tags):
+    return ",".join(tags)
